@@ -271,7 +271,6 @@ function StepPanel({ step, active, completed, title, children }) {
 function buildMathAccordions(cands, selected, n, k) {
   const selCands = selected.map(i => cands[i]);
   const lambdas = selCands.map(c => c.od_rate);
-  const topC = selCands.reduce((a, b) => (a.od_rate > b.od_rate ? a : b), selCands[0] || {});
   const baselineP = 0.0003;
   const avgEff = eff(0); // all selected counties have site at distance 0
   const baselineScore = cands.reduce((s, c) => s + (c.od_rate / 100000) * c.population, 0);
@@ -289,15 +288,22 @@ function buildMathAccordions(cands, selected, n, k) {
   const countGood = randomScores.filter(s => s <= mu_score).length;
   const meanRandom = randomScores.reduce((a, b) => a + b, 0) / randomScores.length;
 
+  // Build step showing calculations for ALL selected counties
+  const allCountiesFormula = selCands.map(c =>
+    `${c.county}: λ̂ = (${fmtInt(c.od_deaths)} / ${fmtInt(c.population)}) × 100,000 = ${fmt(c.od_rate)}`
+  ).join("\n");
+
+  const totalLambda = lambdas.reduce((sum, l) => sum + l, 0);
+
   return [
     {
       pill: "Poisson MLE", pillColor: C.terra, title: "Poisson MLE — Rate Estimation",
       description: "Overdose deaths are rare, independent events in a fixed time window — a Poisson process. MLE gives us the best single estimate of the rate λ̂ for each county.",
-      liveValue: `λ̂ = ${fmt(topC.od_rate || 0)}`,
+      liveValue: `Σλ̂ = ${fmt(totalLambda)}`,
       steps: [
-        { label: "Raw data for highest-risk selected county", formula: `County: ${topC.county || "—"}\nOD deaths: ${fmtInt(topC.od_deaths || 0)}\nPopulation: ${fmtInt(topC.population || 0)}`, note: "These are the observed counts the MLE formula uses." },
-        { label: "Apply MLE formula", formula: `λ̂ = (od_deaths / population) × 100,000\n  = (${fmtInt(topC.od_deaths || 0)} / ${fmtInt(topC.population || 0)}) × 100,000\n  = ${fmt(topC.od_rate || 0)} deaths per 100k/yr`, note: "For a Poisson distribution, the MLE is simply the observed rate — maximizing the log-likelihood gives λ̂ = k." },
-        { label: "Total λ̂ across all selected counties", formula: `Σλ̂ = ${lambdas.map(l => fmt(l)).join(" + ") || "—"}\n   = ${fmt(mu)}`, note: "The sum of independent Poisson RVs is also Poisson — this total drives the CLT CI below." },
+        { label: "Selected counties", formula: selCands.map(c => `• ${c.county} — Population: ${fmtInt(c.population)}, OD deaths: ${fmtInt(c.od_deaths)}`).join("\n"), note: "These are your selected counties where sites will be placed." },
+        { label: "Apply MLE formula for each county", formula: allCountiesFormula, note: "For a Poisson distribution, the MLE is simply the observed rate — maximizing the log-likelihood gives λ̂ = k." },
+        { label: "Total λ̂ across all selected counties", formula: `Σλ̂ = ${lambdas.map(l => fmt(l)).join(" + ") || "—"}\n   = ${fmt(totalLambda)}`, note: "The sum of independent Poisson RVs is also Poisson — this total drives the CLT CI below." },
       ]
     },
     {
@@ -317,7 +323,12 @@ function buildMathAccordions(cands, selected, n, k) {
       steps: [
         { label: "Baseline P(death per person)", formula: `baseline_p = 0.0003\n(~30 deaths per 100,000 residents, national avg)`, note: "This is the counterfactual: probability of fatal OD with no nearby site." },
         { label: "Effectiveness function", formula: `eff(d) = 0.40          if d ≤ 5 mi\n       = 0.40×(20-d)/15  if 5 < d ≤ 20 mi\n       = 0              if d > 20 mi\n\nP(death | site at d) = baseline_p × (1 − eff(d))`, note: "Linear decay models diminishing accessibility as travel distance increases." },
-        { label: "For your placement (d = 0 mi, site in county)", formula: `eff(0) = 0.40\nP(death | site in county) = 0.0003 × 0.60 = 0.000180\nRisk reduced by 40% for selected counties`, note: "Selecting a county places a site directly in it — maximum effectiveness." },
+        { label: "Site effectiveness for your selected counties", formula: selCands.map(c => {
+          const countyBaseline = c.od_rate / 100000;
+          const withSite = countyBaseline * (1 - avgEff);
+          const livesSaved = (countyBaseline - withSite) * (c.population / 100000) * 100000;
+          return `${c.county}:\n  Baseline P = ${fmt(countyBaseline, 5)}\n  With site (d=0): P = ${fmt(withSite, 5)}\n  Lives saved/yr ≈ ${fmt(livesSaved, 1)}`;
+        }).join("\n\n"), note: "Each selected county gets a site directly in it (d=0) — maximum 40% effectiveness." },
       ]
     },
     {
@@ -325,6 +336,7 @@ function buildMathAccordions(cands, selected, n, k) {
       description: "We generated 1,000 random k-county placements and scored each. The p-value is the fraction that scored as well as your placement — small p means your choice was not luck.",
       liveValue: `p = ${pval.toFixed(3)}`,
       steps: [
+        { label: "Your selected counties", formula: selCands.map(c => `• ${c.county} (OD rate: ${fmt(c.od_rate)})`).join("\n") + `\n\nYour score: ${fmt(mu_score, 1)} expected deaths`, note: "This is the placement we're testing against random chance." },
         { label: "Random baseline", formula: `1,000 random ${k}-county placements simulated\nMean random score: ${fmt(meanRandom, 1)} expected deaths`, note: "Random placements ignore OD rates — they serve as the null hypothesis." },
         { label: "Compute p-value", formula: `p = #{random ≤ your_score} / 1000\n  = ${countGood} / 1000\n  = ${pval.toFixed(3)}`, note: "Lower expected deaths = better placement. p counts how often random does equally well." },
         { label: "Conclusion", formula: pval < 0.05 ? `p = ${pval.toFixed(3)} < 0.05\n→ REJECT null hypothesis\n→ Your placement is significantly better than random` : `p = ${pval.toFixed(3)} ≥ 0.05\n→ Cannot reject null\n→ Consider the optimal placement`, note: pval < 0.05 ? "The optimizer's structure adds real value — this is not a chance result." : "The optimal placement performs significantly better." },
@@ -335,7 +347,8 @@ function buildMathAccordions(cands, selected, n, k) {
       description: "The sum of independent Poisson RVs is Poisson. When the total rate is large, the CLT lets us approximate it as Normal and compute a confidence interval.",
       liveValue: `CI: [${fmt(Math.max(0, lo), 0)}, ${fmt(hi, 0)}]`,
       steps: [
-        { label: "Sum of Poissons is Poisson", formula: `Σλᵢ = ${lambdas.map(l => fmt(l)).join(" + ") || "—"}\n   = ${fmt(mu)}`, note: "Each county contributes an independent Poisson(λᵢ) — their sum is Poisson(Σλᵢ)." },
+        { label: "Selected counties' λ values", formula: selCands.map(c => `${c.county}: λ̂ = ${fmt(c.od_rate)}`).join("\n"), note: "Each county contributes an independent Poisson(λᵢ) random variable." },
+        { label: "Sum of Poissons is Poisson", formula: `Σλᵢ = ${lambdas.map(l => fmt(l)).join(" + ") || "—"}\n   = ${fmt(mu)}`, note: "The sum of independent Poisson RVs is also Poisson(Σλᵢ)." },
         { label: "CLT: large Poisson ≈ Normal", formula: `μ = Σλᵢ = ${fmt(mu)}\nσ = √μ  = ${fmt(sigma)}\n(For Poisson: mean = variance = λ)`, note: "When μ > 30, Normal approximation is reliable — the CLT applies here." },
         { label: "95% Confidence Interval", formula: `CI = μ ± 1.96σ\n   = ${fmt(mu)} ± 1.96 × ${fmt(sigma)}\n   = (${fmt(Math.max(0, lo), 1)}, ${fmt(hi, 1)})`, note: `We are 95% confident total deaths across selected counties fall in this range.` },
       ]
