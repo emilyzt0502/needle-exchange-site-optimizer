@@ -356,6 +356,53 @@ function buildMathAccordions(cands, selected, n, k) {
   ];
 }
 
+// ─── Expected Deaths Math Accordion Builder ──────────────────────────────────
+function buildExpectedDeathsAccordion(cands, selected, totalScore) {
+  const selectedSet = new Set(selected);
+  const selCands = selected.map(i => cands[i]);
+  const unselCands = cands.filter((_, i) => !selectedSet.has(i));
+
+  const selectedContribs = selCands.map(c => {
+    const p = c.od_rate / 100000;
+    const withSite = conditionalProb(p, 0); // d=0 → full 40% effectiveness
+    const deaths = withSite * c.population;
+    const saved = p * c.population - deaths;
+    return { c, deaths, saved };
+  });
+
+  const selTotal = selectedContribs.reduce((s, x) => s + x.deaths, 0);
+  const unselTotal = unselCands.reduce((s, c) => s + (c.od_rate / 100000) * c.population, 0);
+
+  return {
+    pill: "E[Deaths]", pillColor: C.gold,
+    title: "Expected Deaths — Placement Scoring",
+    description: "For each county, expected deaths = P(death | site at distance d) × population. Counties with a site (d = 0) get the full 40% effectiveness reduction. All other counties have no site (d = 999 → eff = 0%).",
+    liveValue: `${fmtInt(totalScore)} total`,
+    steps: [
+      {
+        label: `Selected counties with site (d=0, eff=40%) — ${selCands.length} counti${selCands.length === 1 ? "y" : "es"}`,
+        formula: selectedContribs.map(({ c, deaths, saved }) =>
+          `${c.county}:\n  P = (${fmt(c.od_rate)}/100k) × (1 − 0.40) = ${fmt(c.od_rate * 0.6 / 100000, 6)}\n  Deaths = P × ${fmtInt(c.population)} pop = ${fmt(deaths, 1)}\n  Lives saved vs baseline: ${fmt(saved, 1)}`
+        ).join("\n\n") + `\n\nSubtotal (selected): ${fmt(selTotal, 1)} expected deaths`,
+        note: "Each selected county gets a needle-exchange site at d=0 miles — maximum 40% risk reduction."
+      },
+      {
+        label: `Unselected counties (no site, full rate) — ${unselCands.length} counties`,
+        formula: unselCands.slice(0, 8).map(c =>
+          `${c.county}: (${fmt(c.od_rate)}/100k) × ${fmtInt(c.population)} pop = ${fmt((c.od_rate / 100000) * c.population, 1)}`
+        ).join("\n") + (unselCands.length > 8 ? `\n… and ${unselCands.length - 8} more` : "") +
+        `\n\nSubtotal (unselected): ${fmt(unselTotal, 1)} expected deaths`,
+        note: "d=999 → eff=0 → no benefit for counties without a site."
+      },
+      {
+        label: "Total expected deaths (the score)",
+        formula: `Total = selected subtotal + unselected subtotal\n     = ${fmt(selTotal, 1)} + ${fmt(unselTotal, 1)}\n     = ${fmtInt(totalScore)}`,
+        note: "The optimizer minimizes this total across all possible k-county placements. Lower = better."
+      }
+    ]
+  };
+}
+
 // ─── Brute-Force Optimizer ───────────────────────────────────────────────────
 function bruteForceOptimal(cands, k) {
   let bestScore = Infinity, bestIdxs = [];
@@ -561,6 +608,7 @@ export default function App() {
               <ScoreBar label="Baseline" score={baselineScore} baseline={baselineScore} color={C.terra} />
               <ScoreBar label="Your placement" score={userScore} baseline={baselineScore} color={C.gold} />
               <div style={{ marginTop: 20, marginBottom: 8, fontFamily: F.mono, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>The Math Behind Your Placement</div>
+              <MathAccordion {...buildExpectedDeathsAccordion(candidates, userPicks, userScore)} />
               {buildMathAccordions(candidates, userPicks, candidates.length, budget).map((a, i) => <MathAccordion key={i} {...a} />)}
               {step === 4 && <button onClick={runOptimal} style={{ marginTop: 16, background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "12px 28px", fontFamily: F.mono, fontSize: 13, cursor: "pointer" }}>See the Optimal Answer →</button>}
             </StepPanel>
@@ -585,6 +633,7 @@ export default function App() {
               <ScoreBar label="Your placement" score={userScore} baseline={baselineScore} color={C.slate} />
               <ScoreBar label="Optimal placement" score={optScore} baseline={baselineScore} color={C.gold} />
               <div style={{ marginTop: 20, marginBottom: 8, fontFamily: F.mono, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>The Math Behind the Optimal Placement</div>
+              <MathAccordion {...buildExpectedDeathsAccordion(candidates, optimal.idxs, optScore)} />
               {buildMathAccordions(candidates, optimal.idxs, candidates.length, budget).map((a, i) => <MathAccordion key={i} {...a} />)}
               <button onClick={() => { setSelectedState(""); setCandidates([]); setUserPicks([]); setOptimal(null); setStep(1); }} style={{ marginTop: 16, background: C.slate, color: "#fff", border: "none", borderRadius: 8, padding: "12px 28px", fontFamily: F.mono, fontSize: 13, cursor: "pointer" }}>Try a Different State →</button>
             </StepPanel>
